@@ -1,0 +1,3 @@
+If Asha is elected VP, then Rajat is chosen as GSec.
+Rajat is not chosen as GSec.
+Therefore, Asha is not elected VP.
