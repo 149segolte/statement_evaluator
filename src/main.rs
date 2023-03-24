@@ -137,9 +137,9 @@ fn convertor(list: &mut Vec<String>, operand: &String) -> String {
             Type::Operand(ref operand) => operand.clone(),
             Type::Operator(_, ref op) => {
                 if op == "and" {
-                    " & ".to_string()
+                    " ∧ ".to_string()
                 } else {
-                    " | ".to_string()
+                    " ∨ ".to_string()
                 }
             }
         })
@@ -156,10 +156,10 @@ fn convertor(list: &mut Vec<String>, operand: &String) -> String {
 }
 
 fn token_to_expression(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
+    let mut express = String::new();
     if tokens.contains(&Token::Word("If".to_string())) {
         let mut intermidiate = Vec::new();
         let tmp = implies(&mut intermidiate, tokens);
-        let mut express = String::new();
         for char in tmp.chars() {
             match char {
                 'A'..='Z' => {
@@ -169,11 +169,11 @@ fn token_to_expression(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
                 _ => express.push(char),
             }
         }
-        express
     } else {
         let input = remove_punctuation(&to_string(tokens));
-        convertor(list, &input)
+        express.push_str(&convertor(list, &input));
     }
+    express
 }
 
 fn implies(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
@@ -305,6 +305,104 @@ fn to_string(tokens: &Vec<Token>) -> String {
     string.trim().to_string()
 }
 
+fn from_string(string: &str) -> Vec<Type> {
+    let mut res = Vec::new();
+    let mut count = 0;
+    for c in string.chars() {
+        match c {
+            'A'..='Z' => res.push(Type::Operand(c.to_string())),
+            '(' | ')' | '∧' | '∨' | '~' | '=' => res.push(Type::Operator(count, c.to_string())),
+            _ => (),
+        }
+        count += 1;
+    }
+    res
+}
+
+fn precedence(op: &str) -> i32 {
+    match op {
+        "=" => 1,
+        "∨" => 2,
+        "∧" => 3,
+        "~" => 4,
+        _ => -1,
+    }
+}
+
+fn infix_to_postfix(infix: &str) -> String {
+    let expression = from_string(infix);
+    let mut stack = Vec::new();
+    let mut res = String::new();
+
+    for c in expression.iter() {
+        match c {
+            Type::Operand(ref val) => res.push_str(&format!("{} ", val)),
+            Type::Operator(_, ref op) => match op.as_str() {
+                "(" => stack.push("("),
+                ")" => {
+                    while !stack.is_empty() && stack.last().unwrap() != &"(" {
+                        res.push_str(&format!("{} ", stack.pop().unwrap()));
+                    }
+                    stack.pop();
+                }
+                _ => {
+                    if stack.is_empty() || stack.last().unwrap() == &"(" {
+                        stack.push(op);
+                    } else {
+                        while !stack.is_empty()
+                            && stack.last().unwrap() != &"("
+                            && precedence(op) <= precedence(stack.last().unwrap())
+                        {
+                            res.push_str(&format!("{} ", stack.pop().unwrap()));
+                        }
+                        stack.push(op);
+                    }
+                }
+            },
+        }
+    }
+    while !stack.is_empty() {
+        res.push_str(&format!("{} ", stack.pop().unwrap()));
+    }
+    res
+}
+
+fn evaluate(postfix: String, state: u32) -> Vec<bool> {
+    let expression = from_string(&postfix);
+    let mut stack = Vec::new();
+    let mut res = Vec::new();
+
+    for c in expression.iter() {
+        match c {
+            Type::Operand(ref x) => {
+                let bit = (x.clone().pop().unwrap()) as u8 - 65;
+                let val = ((state >> bit) & 1) != 0;
+                stack.push(val)
+            }
+            Type::Operator(_, ref op) => {
+                let mut operands = Vec::new();
+                if op == "~" {
+                    operands.push(stack.pop().unwrap());
+                } else {
+                    operands.push(stack.pop().unwrap());
+                    operands.push(stack.pop().unwrap());
+                }
+                let val = match op.as_str() {
+                    "~" => !operands[0],
+                    "∧" => operands[0] & operands[1],
+                    "∨" => operands[0] | operands[1],
+                    "=" => !operands[0] | operands[1],
+                    _ => panic!("Unknown operator"),
+                };
+                res.push(val);
+                stack.push(val);
+            }
+        }
+    }
+    res.push(stack.pop().unwrap());
+    res
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
@@ -357,11 +455,6 @@ fn main() {
         return;
     }
 
-    println!("F1: {}", to_string(&tokens[0]));
-    println!("F2: {}", to_string(&tokens[1]));
-    println!("G: {}", to_string(&argument));
-    println!();
-
     let mut operands = Vec::new();
     let f1 = token_to_expression(&mut operands, &tokens[0]);
     let f2 = token_to_expression(&mut operands, &tokens[1]);
@@ -373,7 +466,31 @@ fn main() {
     }
     println!();
 
-    println!("F1: {}", f1);
-    println!("F2: {}", f2);
-    println!("G: {}", g);
+    println!("F1: {}", f1.replace("=", "=>"));
+    println!("F2: {}", f2.replace("=", "=>"));
+    println!("G: {}", g.replace("=", "=>"));
+
+    let final_expression = format!(
+        "({} & {}) => {}",
+        f1.replace("=", "=>"),
+        f2.replace("=", "=>"),
+        g.replace("=", "=>")
+    );
+    println!("Final expression: {}", final_expression);
+    println!();
+
+    let postfix = infix_to_postfix(&final_expression);
+    println!("Postfix: {}", postfix);
+    println!("Truth table:");
+    for i in (0..2_u32.pow(operands.len() as u32)).rev() {
+        print!("{:04b}", i);
+        let tt = format!("{:08b}", evaluate(postfix.clone(), i).iter().rev().fold(0, |acc, &b| acc*2 + b as u32));
+        for c in tt.chars().rev() {
+            print!("{}", c);
+        }
+        println!();
+    }
+    // println!("{}", evaluate("100 * 2 + 12".to_string()));
+    // println!("{}", evaluate("100 * ( 2 + 12 )".to_string()));
+    // println!("{}", evaluate("100 * ( 2 + 12 ) / 14".to_string()));
 }
