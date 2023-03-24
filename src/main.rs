@@ -21,6 +21,58 @@ fn remove_punctuation(string: &str) -> String {
     result.join(" ").trim().to_string()
 }
 
+fn dedup_operands(list: &mut Vec<String>, expression: &mut String) {
+    let initial = list.clone();
+    for operand in initial.iter() {
+        let tokens = sentence::SentenceTokenizer::new().tokenize(operand);
+        if tokens.contains(&Token::Word("not".to_string())) {
+            list.remove(list.iter().position(|x| x == operand).unwrap());
+            let op = tokens
+                .iter()
+                .filter(|x| x != &&Token::Word("not".to_string()))
+                .map(|x| match x {
+                    Token::Word(ref word) => word.clone(),
+                    _ => "".to_string(),
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            if !list.contains(&op) {
+                list.push(op.clone());
+            }
+        }
+    }
+    let mut new_expression = String::new();
+    for char in expression.chars() {
+        match char {
+            'A'..='Z' => {
+                let index = char as u8 - 65;
+                let op = initial[index as usize].clone();
+                let tokens = sentence::SentenceTokenizer::new().tokenize(&op);
+                if tokens.contains(&Token::Word("not".to_string())) {
+                    let new_op = tokens
+                        .iter()
+                        .filter(|x| x != &&Token::Word("not".to_string()))
+                        .map(|x| match x {
+                            Token::Word(ref word) => word.clone(),
+                            _ => "".to_string(),
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ");
+                    let new_index = list.iter().position(|x| x == &new_op).unwrap();
+                    let new = (new_index as u8 + 65) as char;
+                    new_expression.push_str(vec!['~', new].iter().collect::<String>().as_str());
+                } else {
+                    let new_index = list.iter().position(|x| x == &op).unwrap();
+                    let new = (new_index as u8 + 65) as char;
+                    new_expression.push(new);
+                }
+            }
+            _ => new_expression.push(char),
+        }
+    }
+    *expression = new_expression;
+}
+
 fn convertor(list: &mut Vec<String>, operand: &String) -> String {
     let tokens = SentenceTokenizer::new().tokenize(operand);
     let mut intermidiate = Vec::new();
@@ -79,16 +131,22 @@ fn convertor(list: &mut Vec<String>, operand: &String) -> String {
         })
         .collect();
 
-    let res = intermidiate.iter().map(|x| match x {
-        Type::Operand(ref operand) => operand.clone(),
-        Type::Operator(_, ref op) => {
-            if op == "and" {
-                "&".to_string()
-            } else {
-                "|".to_string()
+    let mut res = intermidiate
+        .iter()
+        .map(|x| match x {
+            Type::Operand(ref operand) => operand.clone(),
+            Type::Operator(_, ref op) => {
+                if op == "and" {
+                    " & ".to_string()
+                } else {
+                    " | ".to_string()
+                }
             }
-        }
-    }).collect::<Vec<String>>().join("");
+        })
+        .collect::<Vec<String>>()
+        .join("");
+
+    dedup_operands(list, &mut res);
 
     if res.len() > 2 {
         format!("({})", res)
@@ -97,7 +155,7 @@ fn convertor(list: &mut Vec<String>, operand: &String) -> String {
     }
 }
 
-fn expression(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
+fn token_to_expression(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
     if tokens.contains(&Token::Word("If".to_string())) {
         let mut intermidiate = Vec::new();
         let tmp = implies(&mut intermidiate, tokens);
@@ -201,9 +259,8 @@ fn implies(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
                 intermidiate.remove(then_index - 2);
                 let b = intermidiate.remove(then_index - 2);
                 match (a, b) {
-                    (Type::Operand(a), Type::Operand(b)) => {
-                        intermidiate.insert(then_index - 2, Type::Operand(format!("({}={})", a, b)))
-                    }
+                    (Type::Operand(a), Type::Operand(b)) => intermidiate
+                        .insert(then_index - 2, Type::Operand(format!("({} = {})", a, b))),
                     _ => panic!("Error"),
                 }
             } else {
@@ -220,7 +277,7 @@ fn implies(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
             res.remove(0);
             res.remove(res.len() - 1);
             res
-        },
+        }
         _ => panic!("Error"),
     }
 }
@@ -306,9 +363,9 @@ fn main() {
     println!();
 
     let mut operands = Vec::new();
-    let f1 = expression(&mut operands, &tokens[0]);
-    let f2 = expression(&mut operands, &tokens[1]);
-    let g = expression(&mut operands, &argument);
+    let f1 = token_to_expression(&mut operands, &tokens[0]);
+    let f2 = token_to_expression(&mut operands, &tokens[1]);
+    let g = token_to_expression(&mut operands, &argument);
 
     println!("Operands:");
     for (i, operand) in operands.iter().enumerate() {
