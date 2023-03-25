@@ -367,40 +367,49 @@ fn infix_to_postfix(infix: &str) -> String {
     res
 }
 
-fn evaluate(postfix: String, state: u32) -> Vec<bool> {
+fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
     let expression = from_string(&postfix);
     let mut stack = Vec::new();
     let mut res = Vec::new();
+    let mut header = Vec::new();
 
     for c in expression.iter() {
         match c {
             Type::Operand(ref x) => {
                 let bit = (x.clone().pop().unwrap()) as u8 - 65;
                 let val = ((state >> bit) & 1) != 0;
-                stack.push(val)
+                stack.push((x.clone(), val))
             }
             Type::Operator(_, ref op) => {
                 let mut operands = Vec::new();
+                let mut expr = String::new();
                 if op == "~" {
                     operands.push(stack.pop().unwrap());
+                    expr.push_str(op);
+                    expr.push_str(&operands[0].0);
                 } else {
                     operands.push(stack.pop().unwrap());
                     operands.push(stack.pop().unwrap());
+                    expr.push_str("(");
+                    expr.push_str(&operands[1].0);
+                    expr.push_str(op);
+                    expr.push_str(&operands[0].0);
+                    expr.push_str(")");
                 }
                 let val = match op.as_str() {
-                    "~" => !operands[0],
-                    "∧" => operands[0] & operands[1],
-                    "∨" => operands[0] | operands[1],
-                    "=" => !operands[0] | operands[1],
+                    "~" => !operands[0].1,
+                    "∧" => operands[1].1 & operands[0].1,
+                    "∨" => operands[1].1 | operands[0].1,
+                    "=" => !operands[1].1 | operands[0].1,
                     _ => panic!("Unknown operator"),
                 };
+                header.push(expr.clone());
                 res.push(val);
-                stack.push(val);
+                stack.push((expr.clone(), val));
             }
         }
     }
-    res.push(stack.pop().unwrap());
-    res
+    (header, res)
 }
 
 fn main() {
@@ -471,7 +480,7 @@ fn main() {
     println!("G: {}", g.replace("=", "=>"));
 
     let final_expression = format!(
-        "({} & {}) => {}",
+        "(({}) ∧ ({})) => {}",
         f1.replace("=", "=>"),
         f2.replace("=", "=>"),
         g.replace("=", "=>")
@@ -482,15 +491,45 @@ fn main() {
     let postfix = infix_to_postfix(&final_expression);
     println!("Postfix: {}", postfix);
     println!("Truth table:");
-    for i in (0..2_u32.pow(operands.len() as u32)).rev() {
-        print!("{:04b}", i);
-        let tt = format!("{:08b}", evaluate(postfix.clone(), i).iter().rev().fold(0, |acc, &b| acc*2 + b as u32));
-        for c in tt.chars().rev() {
-            print!("{}", c);
-        }
-        println!();
+    let no_of_operands = operands.len() as u32;
+    let mut tt = Vec::new();
+    let mut head = Vec::new();
+    for i in 0..2_u32.pow(no_of_operands) {
+        let mut state = (0..no_of_operands)
+            .map(|j| (i >> j) & 1 != 0)
+            .collect::<Vec<bool>>();
+        let (top, mut res) = evaluate(postfix.clone(), i);
+        head = top;
+        state.append(&mut res);
+        tt.push(state);
     }
-    // println!("{}", evaluate("100 * 2 + 12".to_string()));
-    // println!("{}", evaluate("100 * ( 2 + 12 )".to_string()));
-    // println!("{}", evaluate("100 * ( 2 + 12 ) / 14".to_string()));
+    tt.sort_by(|a, b| {
+        let a_state = a[0..operands.len()].to_vec();
+        let b_state = b[0..operands.len()].to_vec();
+        let a_result = a_state.iter().fold(0, |acc, &b| acc*2 + b as u32);
+        let b_result = b_state.iter().fold(0, |acc, &b| acc*2 + b as u32);
+        a_result.cmp(&b_result)
+    });
+
+    // print truth table in a nice way
+    let mut header = Vec::new();
+    for i in 0..operands.len() {
+        header.push(format!("{}", ((i + 65) as u8) as char));
+    }
+    for expr in head.iter() {
+        header.push(format!("{}", expr.replace("=", "=>")));
+    }
+    let separator = header.iter().map(|x| "-".repeat(x.chars().count())).collect::<Vec<String>>().join("-+-");
+    println!("+-{}-+", separator);
+    println!("| {} |", header.join(" | "));
+    println!("+-{}-+", separator);
+    for row in tt.iter().rev() {
+        let mut opt = Vec::new();
+        for (i, col) in row.iter().enumerate() {
+            let indent = header[i].chars().count();
+            opt.push(format!("{:^pad$}", if *col { 'T' } else { 'F' }, pad = indent));
+        }
+        println!("| {} |", opt.join(" | "));
+        println!("+-{}-+", separator);
+    }
 }

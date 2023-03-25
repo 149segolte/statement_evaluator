@@ -1,9 +1,9 @@
-If Asha is elected VP, then If Bharat is not a Chansellor and Rajat is a GSec, then Fujia will take over.
-Rajat is not a GSec.
-Therefore, Asha is not elected VP.
-
 If Asha is elected VP, then Rajat is chosen as GSec and Bharti is chosen as Treasurer.
 Rajat is not chosen as GSec.
+Therefore, Asha is not elected VP.
+
+If Asha is elected VP, then If Bharat is not a Chansellor and Rajat is a GSec, then Fujia will take over.
+Rajat is not a GSec.
 Therefore, Asha is not elected VP.
 
 If Asha is elected VP, then Rajat is chosen as GSec.
