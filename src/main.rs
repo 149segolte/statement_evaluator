@@ -1,5 +1,7 @@
 use sentence::{SentenceTokenizer, Token};
 
+const ARGUMENTS: [&str; 2] = ["therefore", "so"];
+
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
     Operator(u32, String),
@@ -153,6 +155,10 @@ fn convertor(list: &mut Vec<String>, operand: &String) -> String {
     } else {
         res
     }
+}
+
+fn token_to_expression_1(operands: &mut Vec<String>, tokens: &Vec<Token>) -> String {
+    todo!()
 }
 
 fn token_to_expression(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
@@ -413,6 +419,29 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
 }
 
 fn main() {
+    let filter1 = |x: &[Type; 4]| match x {
+        [Type::Operator(_, ref op1), Type::Operand(_), Type::Operator(_, ref op2), Type::Operand(_)] => {
+            if op1 == "if" && op2 == "then" {
+                Some("=>")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let filter2 = |x: &[Type; 5]| match x {
+        [Type::Operator(_, ref op1), Type::Operand(_), Type::Operator(_, ref op2), Type::Operand(_), Type::Operator(_, ref op3)] => {
+            if op1 == "either" && op2 == "or" && op3 == "but not both" {
+                Some("⊕")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    let mut filters: Vec<Box<dyn Fn(&[Type; 4]) -> Option<&str>>> = Vec::new();
+    filters.push(Box::new(filter1));
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
         println!("Usage: ./{} <text/file path>", args[0]);
@@ -446,7 +475,7 @@ fn main() {
     for (i, line) in tokens.iter().enumerate() {
         match line[0] {
             Token::Word(ref word) => {
-                if word == "Therefore" || word == "So" {
+                if ARGUMENTS.contains(&word.to_lowercase().as_str()) {
                     argument = line.clone();
                     argument.remove(0);
                     if let Some(Token::Punctuation(_)) = argument.first() {
@@ -506,8 +535,8 @@ fn main() {
     tt.sort_by(|a, b| {
         let a_state = a[0..operands.len()].to_vec();
         let b_state = b[0..operands.len()].to_vec();
-        let a_result = a_state.iter().fold(0, |acc, &b| acc*2 + b as u32);
-        let b_result = b_state.iter().fold(0, |acc, &b| acc*2 + b as u32);
+        let a_result = a_state.iter().fold(0, |acc, &b| acc * 2 + b as u32);
+        let b_result = b_state.iter().fold(0, |acc, &b| acc * 2 + b as u32);
         a_result.cmp(&b_result)
     });
 
@@ -519,7 +548,11 @@ fn main() {
     for expr in head.iter() {
         header.push(format!("{}", expr.replace("=", "=>")));
     }
-    let separator = header.iter().map(|x| "-".repeat(x.chars().count())).collect::<Vec<String>>().join("-+-");
+    let separator = header
+        .iter()
+        .map(|x| "-".repeat(x.chars().count()))
+        .collect::<Vec<String>>()
+        .join("-+-");
     println!("+-{}-+", separator);
     println!("| {} |", header.join(" | "));
     println!("+-{}-+", separator);
@@ -527,9 +560,13 @@ fn main() {
         let mut opt = Vec::new();
         for (i, col) in row.iter().enumerate() {
             let indent = header[i].chars().count();
-            opt.push(format!("{:^pad$}", if *col { 'T' } else { 'F' }, pad = indent));
+            opt.push(format!(
+                "{:^pad$}",
+                if *col { 'T' } else { 'F' },
+                pad = indent
+            ));
         }
         println!("| {} |", opt.join(" | "));
-        println!("+-{}-+", separator);
     }
+    println!("+-{}-+", separator);
 }
