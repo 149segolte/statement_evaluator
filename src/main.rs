@@ -2,9 +2,15 @@ use sentence::{SentenceTokenizer, Token};
 
 const ARGUMENTS: [&str; 2] = ["therefore", "so"];
 
+type Filter = (
+    usize,
+    Vec<&'static str>,
+    Box<dyn Fn(&[Type]) -> Option<Type>>,
+);
+
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
-    Operator(u32, String),
+    Operator(usize, String),
     Operand(String),
 }
 
@@ -157,7 +163,89 @@ fn convertor(list: &mut Vec<String>, operand: &String) -> String {
     }
 }
 
-fn token_to_expression_1(operands: &mut Vec<String>, tokens: &Vec<Token>) -> String {
+fn token_to_type(keywords: &Vec<&str>, tokens: &Vec<Token>) -> Result<Vec<Type>, String> {
+    let mut res = Vec::new();
+    let mut operand = String::new();
+    let mut count = 0;
+
+    for t in tokens.iter() {
+        match t {
+            Token::Word(ref word) => {
+                if keywords.contains(&word.as_str()) {
+                    if !operand.is_empty() {
+                        res.push(Type::Operand(operand.trim().to_string()));
+                        operand.clear();
+                    }
+                    res.push(Type::Operator(count, word.to_string()));
+                    count += 1;
+                } else {
+                    operand.push_str(" ");
+                    operand.push_str(word);
+                }
+            }
+            _ => {
+                operand.push_str(" ");
+                operand.push_str(&to_string(&vec![t.clone()]));
+            }
+        }
+    }
+    if !operand.is_empty() {
+        res.push(Type::Operand(operand.trim().to_string()));
+        operand.clear();
+    }
+    let x = count as f32 / keywords.len() as f32;
+    if x == (x as i32) as f32 {
+        Ok(res)
+    } else {
+        Err("Invalid expression".to_string())
+    }
+}
+
+fn token_to_expression_1(
+    filters: Vec<Filter>,
+    _operands: &mut Vec<String>,
+    tokens: &Vec<Token>,
+) -> String {
+    let mut tmp = Vec::new();
+    let mut intermidiate = Vec::new();
+    for filter in filters.iter() {
+        let keywords = filter.1.clone();
+        let num = filter.0;
+        tmp = token_to_type(&keywords, &tokens).unwrap_or(Vec::new());
+        let mut flag = true;
+        while flag {
+            tmp = tmp
+                .windows(num)
+                .map(|x| match filter.2(x) {
+                    Some(y) => {
+                        intermidiate.append(
+                            x.iter()
+                                .filter_map(|op| match op {
+                                    Type::Operand(ref statement) => {
+                                        if !statement.starts_with("(") {
+                                            Some(statement.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .as_mut(),
+                        );
+                        y
+                    }
+                    None => x[0].to_owned(),
+                })
+                .collect::<Vec<_>>();
+            flag = tmp.iter().any(|x| match x {
+                Type::Operator(_, _) => true,
+                _ => false,
+            });
+        }
+        println!("{:?}", tmp);
+        println!("{:?}", intermidiate);
+    }
     todo!()
 }
 
@@ -419,28 +507,30 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
 }
 
 fn main() {
-    let filter1 = |x: &[Type; 4]| match x {
-        [Type::Operator(_, ref op1), Type::Operand(_), Type::Operator(_, ref op2), Type::Operand(_)] => {
+    let implies = |x: &[Type]| match x {
+        [Type::Operator(_, ref op1), Type::Operand(ref a), Type::Operator(_, ref op2), Type::Operand(ref b)] => {
             if op1 == "if" && op2 == "then" {
-                Some("=>")
+                Some(Type::Operand(format!("({} {} {})", a, "=>", b)))
             } else {
                 None
             }
         }
         _ => None,
     };
-    let filter2 = |x: &[Type; 5]| match x {
-        [Type::Operator(_, ref op1), Type::Operand(_), Type::Operator(_, ref op2), Type::Operand(_), Type::Operator(_, ref op3)] => {
+    let filter2 = |x: &[Type]| match x {
+        [Type::Operator(_, ref op1), Type::Operand(ref a), Type::Operator(_, ref op2), Type::Operand(ref b), Type::Operator(_, ref op3)] => {
             if op1 == "either" && op2 == "or" && op3 == "but not both" {
-                Some("⊕")
+                Some(Type::Operand(format!("({} {} {})", a, "⊕", b)))
             } else {
                 None
             }
         }
         _ => None,
     };
-    let mut filters: Vec<Box<dyn Fn(&[Type; 4]) -> Option<&str>>> = Vec::new();
-    filters.push(Box::new(filter1));
+    let filters: Vec<Filter> = vec![
+        (4, vec!["if", "then"], Box::new(implies)),
+        (5, vec!["either", "or", "but not both"], Box::new(filter2)),
+    ];
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() != 2 {
@@ -468,6 +558,12 @@ fn main() {
         .map(|line| {
             let token = tokenizer.tokenize(line);
             token
+                .iter()
+                .filter_map(|t| match t {
+                    Token::Word(ref w) => Some(Token::Word(w.to_lowercase())),
+                    _ => None,
+                })
+                .collect::<Vec<Token>>()
         })
         .collect::<Vec<Vec<Token>>>();
 
@@ -494,7 +590,7 @@ fn main() {
     }
 
     let mut operands = Vec::new();
-    let f1 = token_to_expression(&mut operands, &tokens[0]);
+    let f1 = token_to_expression_1(filters, &mut operands, &tokens[0]);
     let f2 = token_to_expression(&mut operands, &tokens[1]);
     let g = token_to_expression(&mut operands, &argument);
 
