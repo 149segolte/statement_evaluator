@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use sentence::{SentenceTokenizer, Token};
 
 const ARGUMENTS: [&str; 2] = ["therefore", "so"];
@@ -10,183 +12,44 @@ type Filter = (
 
 #[derive(Debug, Clone, PartialEq)]
 enum Type {
-    Operator(usize, String),
+    Keyword(String),
     Operand(String),
+    Intermidiate(String),
 }
 
-fn remove_punctuation(string: &str) -> String {
-    let mut result = Vec::new();
-    let tokenizer = SentenceTokenizer::new();
-    let tokens = tokenizer.tokenize(string);
-    for t in tokens.iter() {
-        match t {
-            Token::Word(ref word) => {
-                result.push(word.clone());
-            }
-            _ => (),
+impl Type {
+    fn to_string(&self) -> String {
+        match self {
+            Type::Keyword(k) => k.to_string(),
+            Type::Operand(o) => o.to_string(),
+            Type::Intermidiate(i) => i.to_string(),
         }
-    }
-    result.join(" ").trim().to_string()
-}
-
-fn dedup_operands(list: &mut Vec<String>, expression: &mut String) {
-    let initial = list.clone();
-    for operand in initial.iter() {
-        let tokens = sentence::SentenceTokenizer::new().tokenize(operand);
-        if tokens.contains(&Token::Word("not".to_string())) {
-            list.remove(list.iter().position(|x| x == operand).unwrap());
-            let op = tokens
-                .iter()
-                .filter(|x| x != &&Token::Word("not".to_string()))
-                .map(|x| match x {
-                    Token::Word(ref word) => word.clone(),
-                    _ => "".to_string(),
-                })
-                .collect::<Vec<String>>()
-                .join(" ");
-            if !list.contains(&op) {
-                list.push(op.clone());
-            }
-        }
-    }
-    let mut new_expression = String::new();
-    for char in expression.chars() {
-        match char {
-            'A'..='Z' => {
-                let index = char as u8 - 65;
-                let op = initial[index as usize].clone();
-                let tokens = sentence::SentenceTokenizer::new().tokenize(&op);
-                if tokens.contains(&Token::Word("not".to_string())) {
-                    let new_op = tokens
-                        .iter()
-                        .filter(|x| x != &&Token::Word("not".to_string()))
-                        .map(|x| match x {
-                            Token::Word(ref word) => word.clone(),
-                            _ => "".to_string(),
-                        })
-                        .collect::<Vec<String>>()
-                        .join(" ");
-                    let new_index = list.iter().position(|x| x == &new_op).unwrap();
-                    let new = (new_index as u8 + 65) as char;
-                    new_expression.push_str(vec!['~', new].iter().collect::<String>().as_str());
-                } else {
-                    let new_index = list.iter().position(|x| x == &op).unwrap();
-                    let new = (new_index as u8 + 65) as char;
-                    new_expression.push(new);
-                }
-            }
-            _ => new_expression.push(char),
-        }
-    }
-    *expression = new_expression;
-}
-
-fn convertor(list: &mut Vec<String>, operand: &String) -> String {
-    let tokens = SentenceTokenizer::new().tokenize(operand);
-    let mut intermidiate = Vec::new();
-    let mut operand = String::new();
-    let mut count = 0;
-
-    for t in tokens.iter() {
-        match t {
-            Token::Word(ref word) => {
-                if word == "and" || word == "or" {
-                    if !operand.is_empty() {
-                        intermidiate.push(Type::Operand(remove_punctuation(&operand)));
-                        operand.clear();
-                    }
-                    intermidiate.push(Type::Operator(count, word.to_string()));
-                    count += 1;
-                } else {
-                    operand.push_str(" ");
-                    operand.push_str(word);
-                }
-            }
-            _ => {
-                operand.push_str(" ");
-                operand.push_str(&to_string(&vec![t.clone()]));
-            }
-        }
-    }
-    if !operand.is_empty() {
-        intermidiate.push(Type::Operand(remove_punctuation(&operand)));
-        operand.clear();
-    }
-
-    let mut operands = intermidiate
-        .iter()
-        .filter_map(|x| match x {
-            Type::Operand(ref operand) => Some(operand.clone()),
-            _ => None,
-        })
-        .collect::<Vec<String>>();
-    operands.dedup();
-    for op in operands.iter() {
-        if !list.contains(op) {
-            list.push(op.clone());
-        }
-    }
-
-    intermidiate = intermidiate
-        .iter()
-        .filter_map(|x| match x {
-            Type::Operand(ref operand) => {
-                let index = list.iter().position(|x| x == operand).unwrap();
-                let char = (index + 65) as u8;
-                Some(Type::Operand(String::from_utf8(vec![char]).unwrap()))
-            }
-            _ => Some(x.clone()),
-        })
-        .collect();
-
-    let mut res = intermidiate
-        .iter()
-        .map(|x| match x {
-            Type::Operand(ref operand) => operand.clone(),
-            Type::Operator(_, ref op) => {
-                if op == "and" {
-                    " ∧ ".to_string()
-                } else {
-                    " ∨ ".to_string()
-                }
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("");
-
-    dedup_operands(list, &mut res);
-
-    if res.len() > 2 {
-        format!("({})", res)
-    } else {
-        res
     }
 }
 
-fn token_to_type(keywords: &Vec<&str>, tokens: &Vec<Token>) -> Result<Vec<Type>, String> {
+enum Expression {
+    Operator(String),
+    Operand(String),
+    Parenthesis(String),
+}
+
+fn string_to_type(keywords: &Vec<&str>, exp: &str) -> Result<Vec<Type>, String> {
     let mut res = Vec::new();
     let mut operand = String::new();
     let mut count = 0;
+    let tokens = exp.split_whitespace().collect::<Vec<&str>>();
 
     for t in tokens.iter() {
-        match t {
-            Token::Word(ref word) => {
-                if keywords.contains(&word.as_str()) {
-                    if !operand.is_empty() {
-                        res.push(Type::Operand(operand.trim().to_string()));
-                        operand.clear();
-                    }
-                    res.push(Type::Operator(count, word.to_string()));
-                    count += 1;
-                } else {
-                    operand.push_str(" ");
-                    operand.push_str(word);
-                }
+        if keywords.contains(t) {
+            if !operand.is_empty() {
+                res.push(Type::Operand(operand.trim().to_string()));
+                operand.clear();
             }
-            _ => {
-                operand.push_str(" ");
-                operand.push_str(&to_string(&vec![t.clone()]));
-            }
+            res.push(Type::Keyword(t.to_string()));
+            count += 1;
+        } else {
+            operand.push_str(" ");
+            operand.push_str(t);
         }
     }
     if !operand.is_empty() {
@@ -201,17 +64,13 @@ fn token_to_type(keywords: &Vec<&str>, tokens: &Vec<Token>) -> Result<Vec<Type>,
     }
 }
 
-fn token_to_expression_1(
-    filters: Vec<Filter>,
-    _operands: &mut Vec<String>,
-    tokens: &Vec<Token>,
-) -> String {
+/* fn token_to_expression(filters: Vec<Filter>, _operands: &mut Vec<String>, tokens: &str) -> String {
     let mut tmp = Vec::new();
     let mut intermidiate = Vec::new();
     for filter in filters.iter() {
         let keywords = filter.1.clone();
         let num = filter.0;
-        tmp = token_to_type(&keywords, &tokens).unwrap_or(Vec::new());
+        tmp = string_to_type(&keywords, &tokens).unwrap_or(Vec::new());
         let mut flag = true;
         while flag {
             tmp = tmp
@@ -247,168 +106,17 @@ fn token_to_expression_1(
         println!("{:?}", intermidiate);
     }
     todo!()
-}
+} */
 
-fn token_to_expression(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
-    let mut express = String::new();
-    if tokens.contains(&Token::Word("If".to_string())) {
-        let mut intermidiate = Vec::new();
-        let tmp = implies(&mut intermidiate, tokens);
-        for char in tmp.chars() {
-            match char {
-                'A'..='Z' => {
-                    let operand = intermidiate[char as usize - 65].clone();
-                    express.push_str(&convertor(list, &operand));
-                }
-                _ => express.push(char),
-            }
-        }
-    } else {
-        let input = remove_punctuation(&to_string(tokens));
-        express.push_str(&convertor(list, &input));
-    }
-    express
-}
-
-fn implies(list: &mut Vec<String>, tokens: &Vec<Token>) -> String {
-    let mut intermidiate = Vec::new();
-    let mut operand = String::new();
-    let mut count = 0;
-
-    for t in tokens.iter() {
-        match t {
-            Token::Word(ref word) => {
-                if word == "If" || word == "then" {
-                    if !operand.is_empty() {
-                        intermidiate.push(Type::Operand(remove_punctuation(&operand)));
-                        operand.clear();
-                    }
-                    intermidiate.push(Type::Operator(count, word.to_string()));
-                    count += 1;
-                } else {
-                    operand.push_str(" ");
-                    operand.push_str(word);
-                }
-            }
-            _ => {
-                operand.push_str(" ");
-                operand.push_str(&to_string(&vec![t.clone()]));
-            }
-        }
-    }
-    if !operand.is_empty() {
-        intermidiate.push(Type::Operand(remove_punctuation(&operand)));
-        operand.clear();
-    }
-
-    let mut operands = intermidiate
-        .iter()
-        .filter_map(|x| match x {
-            Type::Operand(ref operand) => Some(operand.clone()),
-            _ => None,
-        })
-        .collect::<Vec<String>>();
-    operands.dedup();
-    list.append(&mut operands.clone());
-    intermidiate = intermidiate
-        .iter()
-        .filter_map(|x| match x {
-            Type::Operand(ref operand) => {
-                let index = operands.iter().position(|x| x == operand).unwrap();
-                let char = (index + 65) as u8;
-                Some(Type::Operand(String::from_utf8(vec![char]).unwrap()))
-            }
-            _ => Some(x.clone()),
-        })
-        .collect();
-
-    let mut stack = Vec::new();
-    let mut map = Vec::new();
-    for t in intermidiate.iter() {
-        match t {
-            Type::Operator(ref id, ref op) => {
-                if op == "If" {
-                    stack.push(id.clone());
-                } else if op == "then" {
-                    map.push((stack.pop().unwrap(), id.clone()));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    while !map.is_empty() {
-        let (if_id, then_id) = map.remove(0);
-        let then_index = intermidiate
-            .iter()
-            .position(|x| match x {
-                Type::Operator(ref id, ref op) => id == &then_id && op == "then",
-                _ => false,
-            })
-            .unwrap();
-        if if_id + 1 == then_id {
-            if let Type::Operand(_) = intermidiate[then_index + 1] {
-                intermidiate.remove(then_index - 2);
-                let a = intermidiate.remove(then_index - 2);
-                intermidiate.remove(then_index - 2);
-                let b = intermidiate.remove(then_index - 2);
-                match (a, b) {
-                    (Type::Operand(a), Type::Operand(b)) => intermidiate
-                        .insert(then_index - 2, Type::Operand(format!("({} = {})", a, b))),
-                    _ => panic!("Error"),
-                }
-            } else {
-                map.push((if_id, then_id));
-            }
-        } else {
-            map.push((if_id, then_id));
-        }
-    }
-
-    match intermidiate.pop() {
-        Some(Type::Operand(x)) => {
-            let mut res = x.clone();
-            res.remove(0);
-            res.remove(res.len() - 1);
-            res
-        }
-        _ => panic!("Error"),
-    }
-}
-
-fn to_string(tokens: &Vec<Token>) -> String {
-    let mut string = String::new();
-    for t in tokens.iter() {
-        match t {
-            Token::Word(ref word) => {
-                string.push_str(" ");
-                string.push_str(word);
-            }
-            Token::Punctuation(ref punct) => match punct {
-                sentence::Punctuation::Colon => string.push_str(":"),
-                sentence::Punctuation::Comma => string.push_str(","),
-                sentence::Punctuation::Dash => string.push_str("-"),
-                sentence::Punctuation::Exclamation => string.push_str("!"),
-                sentence::Punctuation::Period => string.push_str("."),
-                sentence::Punctuation::Question => string.push_str("?"),
-                sentence::Punctuation::Semicolon => string.push_str(";"),
-            },
-            _ => (),
-        }
-    }
-    string.trim().to_string()
-}
-
-fn from_string(string: &str) -> Vec<Type> {
+fn from_string(string: &str) -> Vec<Expression> {
     let mut res = Vec::new();
-    let mut count = 0;
     for c in string.chars() {
         match c {
-            'A'..='Z' => res.push(Type::Operand(c.to_string())),
-            '(' | ')' | '∧' | '∨' | '~' | '=' => res.push(Type::Operator(count, c.to_string())),
+            'A'..='Z' => res.push(Expression::Operand(c.to_string())),
+            '∧' | '∨' | '~' | '=' => res.push(Expression::Operator(c.to_string())),
+            '(' | ')' => res.push(Expression::Parenthesis(c.to_string())),
             _ => (),
         }
-        count += 1;
     }
     res
 }
@@ -430,8 +138,8 @@ fn infix_to_postfix(infix: &str) -> String {
 
     for c in expression.iter() {
         match c {
-            Type::Operand(ref val) => res.push_str(&format!("{} ", val)),
-            Type::Operator(_, ref op) => match op.as_str() {
+            Expression::Operand(ref val) => res.push_str(&format!("{} ", val)),
+            Expression::Parenthesis(ref bracket) => match bracket.as_str() {
                 "(" => stack.push("("),
                 ")" => {
                     while !stack.is_empty() && stack.last().unwrap() != &"(" {
@@ -439,20 +147,21 @@ fn infix_to_postfix(infix: &str) -> String {
                     }
                     stack.pop();
                 }
-                _ => {
-                    if stack.is_empty() || stack.last().unwrap() == &"(" {
-                        stack.push(op);
-                    } else {
-                        while !stack.is_empty()
-                            && stack.last().unwrap() != &"("
-                            && precedence(op) <= precedence(stack.last().unwrap())
-                        {
-                            res.push_str(&format!("{} ", stack.pop().unwrap()));
-                        }
-                        stack.push(op);
-                    }
-                }
+                _ => (),
             },
+            Expression::Operator(ref op) => {
+                if stack.is_empty() || stack.last().unwrap() == &"(" {
+                    stack.push(op);
+                } else {
+                    while !stack.is_empty()
+                        && stack.last().unwrap() != &"("
+                        && precedence(op) <= precedence(stack.last().unwrap())
+                    {
+                        res.push_str(&format!("{} ", stack.pop().unwrap()));
+                    }
+                    stack.push(op);
+                }
+            }
         }
     }
     while !stack.is_empty() {
@@ -469,12 +178,12 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
 
     for c in expression.iter() {
         match c {
-            Type::Operand(ref x) => {
+            Expression::Operand(ref x) => {
                 let bit = (x.clone().pop().unwrap()) as u8 - 65;
                 let val = ((state >> bit) & 1) != 0;
                 stack.push((x.clone(), val))
             }
-            Type::Operator(_, ref op) => {
+            Expression::Operator(ref op) => {
                 let mut operands = Vec::new();
                 let mut expr = String::new();
                 if op == "~" {
@@ -500,7 +209,8 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
                 header.push(expr.clone());
                 res.push(val);
                 stack.push((expr.clone(), val));
-            }
+            },
+            _ => panic!("Unknown expression"),
         }
     }
     (header, res)
@@ -508,7 +218,7 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
 
 fn main() {
     let implies = |x: &[Type]| match x {
-        [Type::Operator(_, ref op1), Type::Operand(ref a), Type::Operator(_, ref op2), Type::Operand(ref b)] => {
+        [Type::Keyword(ref op1), Type::Operand(ref a), Type::Keyword(ref op2), Type::Operand(ref b)] => {
             if op1 == "if" && op2 == "then" {
                 Some(Type::Operand(format!("({} {} {})", a, "=>", b)))
             } else {
@@ -518,7 +228,7 @@ fn main() {
         _ => None,
     };
     let filter2 = |x: &[Type]| match x {
-        [Type::Operator(_, ref op1), Type::Operand(ref a), Type::Operator(_, ref op2), Type::Operand(ref b), Type::Operator(_, ref op3)] => {
+        [Type::Keyword(ref op1), Type::Operand(ref a), Type::Keyword(ref op2), Type::Operand(ref b), Type::Keyword(ref op3)] => {
             if op1 == "either" && op2 == "or" && op3 == "but not both" {
                 Some(Type::Operand(format!("({} {} {})", a, "⊕", b)))
             } else {
@@ -553,46 +263,46 @@ fn main() {
     println!();
 
     let tokenizer = SentenceTokenizer::new();
-    let mut tokens = input
+    let mut expressions = input
         .iter()
         .map(|line| {
             let token = tokenizer.tokenize(line);
             token
                 .iter()
                 .filter_map(|t| match t {
-                    Token::Word(ref w) => Some(Token::Word(w.to_lowercase())),
+                    Token::Word(ref w) => Some(w.to_lowercase()),
                     _ => None,
                 })
-                .collect::<Vec<Token>>()
+                .collect::<Vec<String>>()
+                .join(" ")
         })
-        .collect::<Vec<Vec<Token>>>();
+        .collect::<Vec<String>>();
 
-    let mut argument = Vec::new();
-    for (i, line) in tokens.iter().enumerate() {
-        match line[0] {
-            Token::Word(ref word) => {
-                if ARGUMENTS.contains(&word.to_lowercase().as_str()) {
-                    argument = line.clone();
-                    argument.remove(0);
-                    if let Some(Token::Punctuation(_)) = argument.first() {
-                        argument.remove(0);
-                    }
-                    tokens.remove(i);
-                    break;
-                }
+    let (statements, argument): (Vec<String>, Vec<String>) =
+        expressions.into_iter().partition(|e| {
+            let valid_args = ARGUMENTS
+                .into_iter()
+                .filter(|a| e.starts_with(a.to_owned()))
+                .collect::<Vec<&str>>();
+            if valid_args.is_empty() {
+                false
+            } else {
+                true
             }
-            _ => {}
-        }
-    }
+        });
+
     if argument.is_empty() {
         println!("No argument found");
+        return;
+    } else if argument.len() > 1 {
+        println!("More than one argument found");
         return;
     }
 
     let mut operands = Vec::new();
-    let f1 = token_to_expression_1(filters, &mut operands, &tokens[0]);
-    let f2 = token_to_expression(&mut operands, &tokens[1]);
-    let g = token_to_expression(&mut operands, &argument);
+    let f1 = sentence_to_exp(filters, &mut operands, &statements[0]);
+    let f2 = token_to_expression(filters, &mut operands, &statements[1]);
+    let g = token_to_expression(filters, &mut operands, &argument[0]);
 
     println!("Operands:");
     for (i, operand) in operands.iter().enumerate() {
