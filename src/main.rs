@@ -264,12 +264,12 @@ fn main() {
                 let a_exp = match a {
                     Type::Intermidiate(ref exp) => exp.clone(),
                     Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    _ => panic!("Unknown expression"),
+                    Type::Keyword(_) => return None,
                 };
                 let b_exp = match b {
                     Type::Intermidiate(ref exp) => exp.clone(),
                     Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    _ => panic!("Unknown expression"),
+                    Type::Keyword(_) => return None,
                 };
                 Some(Type::Intermidiate(format!(
                     "({} {} {})",
