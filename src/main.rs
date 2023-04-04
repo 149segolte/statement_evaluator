@@ -29,11 +29,11 @@ enum Type {
 }
 
 impl Type {
-    fn to_string(&self) -> String {
+    fn type_is(&self) -> String {
         match self {
-            Type::Keyword(k) => k.to_string(),
-            Type::Operand(o) => o.to_string(),
-            Type::Intermidiate(i) => i.to_string(),
+            Type::Keyword(_) => "keyword".to_string(),
+            Type::Operand(_) => "operand".to_string(),
+            Type::Intermidiate(_) => "intermidiate".to_string(),
         }
     }
 }
@@ -84,77 +84,40 @@ fn sentence_to_exp(filters: &Vec<Filter>, operands: &mut Vec<String>, sentence: 
     } else {
         let filter = filters.remove(0);
         let mut tmp = string_to_type(&filter.keywords, sentence).unwrap();
-        let mut flag = true;
-        while flag {
-            println!("{:?}", tmp);
-            tmp = tmp
-                .windows(filter.length)
-                .map(|x| {
-                    println!("x: {:?}", x);
-                    for (i, f) in filters.iter().enumerate() {
-                        println!("{}: {} {:?}", i, f.length, f.keywords);
-                    }
-                    println!("operands: {:?}", operands);
-                    (filter.func)(&filters, operands, x).unwrap_or(x[0].clone())
-                })
-                .collect();
-            println!("{:?}", tmp);
-            flag = tmp.contains(&Type::Keyword(filter.keywords[0].to_string()));
+        if tmp.len() > 1 {
+            let mut flag = true;
+            while flag {
+                tmp = tmp
+                    .windows(filter.length)
+                    .map(|x| (filter.func)(&filters, operands, x).unwrap_or(x[0].clone()))
+                    .collect();
+                flag = tmp.iter().any(|x| match x {
+                    Type::Keyword(_) => true,
+                    _ => false,
+                });
+            }
+            let res = tmp[0].clone();
+            match res {
+                Type::Operand(ref op) => {
+                    let id = operands.len() as usize;
+                    operands.push(op.to_string());
+                    id.to_string()
+                }
+                Type::Intermidiate(ref op) => op.to_string(),
+                _ => unreachable!(),
+            }
+        } else {
+            sentence_to_exp(&filters, operands, sentence)
         }
-        todo!()
     }
 }
-
-/* fn token_to_expression(filters: Vec<Filter>, _operands: &mut Vec<String>, tokens: &str) -> String {
-    let mut tmp = Vec::new();
-    let mut intermidiate = Vec::new();
-    for filter in filters.iter() {
-        let keywords = filter.1.clone();
-        let num = filter.0;
-        tmp = string_to_type(&keywords, &tokens).unwrap_or(Vec::new());
-        let mut flag = true;
-        while flag {
-            tmp = tmp
-                .windows(num)
-                .map(|x| match filter.2(x) {
-                    Some(y) => {
-                        intermidiate.append(
-                            x.iter()
-                                .filter_map(|op| match op {
-                                    Type::Operand(ref statement) => {
-                                        if !statement.starts_with("(") {
-                                            Some(statement.to_string())
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    _ => None,
-                                })
-                                .collect::<Vec<_>>()
-                                .as_mut(),
-                        );
-                        y
-                    }
-                    None => x[0].to_owned(),
-                })
-                .collect::<Vec<_>>();
-            flag = tmp.iter().any(|x| match x {
-                Type::Operator(_, _) => true,
-                _ => false,
-            });
-        }
-        println!("{:?}", tmp);
-        println!("{:?}", intermidiate);
-    }
-    todo!()
-} */
 
 fn from_string(string: &str) -> Vec<Expression> {
     let mut res = Vec::new();
     for c in string.chars() {
         match c {
-            'A'..='Z' => res.push(Expression::Operand(c.to_string())),
-            '∧' | '∨' | '~' | '=' => res.push(Expression::Operator(c.to_string())),
+            '0'..='9' => res.push(Expression::Operand(c.to_string())),
+            '∧' | '∨' | '~' | '→' => res.push(Expression::Operator(c.to_string())),
             '(' | ')' => res.push(Expression::Parenthesis(c.to_string())),
             _ => (),
         }
@@ -164,7 +127,7 @@ fn from_string(string: &str) -> Vec<Expression> {
 
 fn precedence(op: &str) -> i32 {
     match op {
-        "=" => 1,
+        "→" => 1,
         "∨" => 2,
         "∧" => 3,
         "~" => 4,
@@ -220,7 +183,7 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
     for c in expression.iter() {
         match c {
             Expression::Operand(ref x) => {
-                let bit = (x.clone().pop().unwrap()) as u8 - 65;
+                let bit = (x.clone().pop().unwrap()) as u8 - 48;
                 let val = ((state >> bit) & 1) != 0;
                 stack.push((x.clone(), val))
             }
@@ -244,7 +207,7 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
                     "~" => !operands[0].1,
                     "∧" => operands[1].1 & operands[0].1,
                     "∨" => operands[1].1 | operands[0].1,
-                    "=" => !operands[1].1 | operands[0].1,
+                    "→" => !operands[1].1 | operands[0].1,
                     _ => panic!("Unknown operator"),
                 };
                 header.push(expr.clone());
@@ -258,9 +221,46 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
 }
 
 fn main() {
+    let strings = vec!["if", "op", "then", "op"];
+    let filter_template = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| {
+        // using the strings vector, generate the pattern for matching
+        // ex: [Type::Keyword(ref op1), ref a, Type::Keyword(ref op2), ref b]
+        let pattern = strings
+            .iter()
+            .zip(x.iter())
+            .map(|(a, b)| {
+                if a == &"op" {
+                    if b.type_is() == "keyword" {
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    b == &Type::Keyword(a.to_string())
+                }
+            })
+            .collect::<Vec<bool>>();
+        let flag = pattern.iter().all(|x| *x);
+        if flag {
+            let a_exp = match a {
+                Type::Intermidiate(ref exp) => exp.clone(),
+                Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
+                Type::Keyword(_) => return None,
+            };
+            let b_exp = match b {
+                Type::Intermidiate(ref exp) => exp.clone(),
+                Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
+                Type::Keyword(_) => return None,
+            };
+            Some(Type::Intermidiate(format!("({} {} {})", a_exp, "→", b_exp)))
+        } else {
+            None
+        }
+    };
     let implies = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| match x {
         [Type::Keyword(ref op1), ref a, Type::Keyword(ref op2), ref b] => {
-            if op1 == "if" && op2 == "then" {
+            if op1 == "if" && op2 == "then" && a.type_is() != "keyword" && b.type_is() != "keyword"
+            {
                 let a_exp = match a {
                     Type::Intermidiate(ref exp) => exp.clone(),
                     Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
@@ -271,28 +271,25 @@ fn main() {
                     Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
                     Type::Keyword(_) => return None,
                 };
-                Some(Type::Intermidiate(format!(
-                    "({} {} {})",
-                    a_exp, "=>", b_exp
-                )))
+                Some(Type::Intermidiate(format!("({} {} {})", a_exp, "→", b_exp)))
             } else {
                 None
             }
         }
         _ => None,
     };
-    let filter2 = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| match x {
+    let xor = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| match x {
         [Type::Keyword(ref op1), ref a, Type::Keyword(ref op2), ref b, Type::Keyword(ref op3)] => {
             if op1 == "either" && op2 == "or" && op3 == "but not both" {
                 let a_exp = match a {
                     Type::Intermidiate(ref exp) => exp.clone(),
                     Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    _ => panic!("Unknown expression"),
+                    Type::Keyword(_) => return None,
                 };
                 let b_exp = match b {
                     Type::Intermidiate(ref exp) => exp.clone(),
                     Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    _ => panic!("Unknown expression"),
+                    Type::Keyword(_) => return None,
                 };
                 Some(Type::Intermidiate(format!("({} {} {})", a_exp, "⊕", b_exp)))
             } else {
@@ -301,9 +298,30 @@ fn main() {
         }
         _ => None,
     };
+    let and = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| match x {
+        [ref a, Type::Keyword(ref op), ref b] => {
+            if op == "and" {
+                let a_exp = match a {
+                    Type::Intermidiate(ref exp) => exp.clone(),
+                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
+                    Type::Keyword(_) => return None,
+                };
+                let b_exp = match b {
+                    Type::Intermidiate(ref exp) => exp.clone(),
+                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
+                    Type::Keyword(_) => return None,
+                };
+                Some(Type::Intermidiate(format!("({} {} {})", a_exp, "∧", b_exp)))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
     let filters: Vec<Filter> = vec![
         Filter::new(4, vec!["if", "then"], implies),
-        Filter::new(5, vec!["either", "or", "but not both"], filter2),
+        Filter::new(5, vec!["either", "or", "but not both"], xor),
+        Filter::new(3, vec!["and"], and),
     ];
 
     let args: Vec<String> = std::env::args().collect();
@@ -342,7 +360,7 @@ fn main() {
         })
         .collect::<Vec<String>>();
 
-    let (argument, statements): (Vec<String>, Vec<String>) =
+    let (mut argument, statements): (Vec<String>, Vec<String>) =
         expressions.into_iter().partition(|e| {
             let valid_args = ARGUMENTS
                 .into_iter()
@@ -361,12 +379,20 @@ fn main() {
     } else if argument.len() > 1 {
         println!("More than one argument found");
         return;
+    } else {
+        argument = argument[0]
+            .split_whitespace()
+            .collect::<Vec<&str>>()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+        argument.remove(0);
     }
 
     let mut operands = Vec::new();
     let f1 = sentence_to_exp(&filters, &mut operands, &statements[0]);
     let f2 = sentence_to_exp(&filters, &mut operands, &statements[1]);
-    let g = sentence_to_exp(&filters, &mut operands, &argument[0]);
+    let g = sentence_to_exp(&filters, &mut operands, &argument.join(" "));
 
     println!("Operands:");
     for (i, operand) in operands.iter().enumerate() {
@@ -374,16 +400,11 @@ fn main() {
     }
     println!();
 
-    println!("F1: {}", f1.replace("=", "=>"));
-    println!("F2: {}", f2.replace("=", "=>"));
-    println!("G: {}", g.replace("=", "=>"));
+    println!("F1: {}", f1);
+    println!("F2: {}", f2);
+    println!("G: {}", g);
 
-    let final_expression = format!(
-        "(({}) ∧ ({})) => {}",
-        f1.replace("=", "=>"),
-        f2.replace("=", "=>"),
-        g.replace("=", "=>")
-    );
+    let final_expression = format!("(({}) ∧ ({})) → {}", f1, f2, g);
     println!("Final expression: {}", final_expression);
     println!();
 
@@ -413,7 +434,7 @@ fn main() {
     // print truth table in a nice way
     let mut header = Vec::new();
     for i in 0..operands.len() {
-        header.push(format!("{}", ((i + 65) as u8) as char));
+        header.push(format!("{}", ((i + 48) as u8) as char));
     }
     for expr in head.iter() {
         header.push(format!("{}", expr.replace("=", "=>")));
