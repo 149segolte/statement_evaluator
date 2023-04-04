@@ -3,8 +3,7 @@ use std::{cell::RefCell, rc::Rc};
 const ARGUMENTS: [&str; 2] = ["therefore", "so"];
 const PLACEHOLDER: &str = "op";
 
-type FilterFn =
-    dyn Fn(Vec<String>, Vec<String>, &Vec<Filter>, &mut Vec<String>, &[Type]) -> Option<Type>;
+type FilterFn = dyn Fn(&Filter, &Vec<Filter>, &mut Vec<String>, &[Type]) -> Option<Type>;
 
 #[derive(Clone)]
 struct Filter {
@@ -40,6 +39,7 @@ impl Type {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 enum Expression {
     Operator(String),
     Operand(String),
@@ -81,8 +81,13 @@ fn sentence_to_exp(filters: &Vec<Filter>, operands: &mut Vec<String>, sentence: 
     let id = operands.len() as usize;
     let mut filters = filters.clone();
     if filters.is_empty() {
-        operands.push(sentence.to_string());
-        return id.to_string();
+        match operands.iter().position(|x| x == sentence) {
+            Some(x) => x.to_string(),
+            None => {
+                operands.push(sentence.to_string());
+                id.to_string()
+            }
+        }
     } else {
         let filter = filters.remove(0);
         let keywords = filter
@@ -98,14 +103,8 @@ fn sentence_to_exp(filters: &Vec<Filter>, operands: &mut Vec<String>, sentence: 
                 tmp = tmp
                     .windows(filter.words.len())
                     .map(|x| {
-                        (*filter.func.borrow_mut())(
-                            filter.words.clone(),
-                            filter.resultant.clone(),
-                            &filters,
-                            operands,
-                            x,
-                        )
-                        .unwrap_or(x[0].clone())
+                        (*filter.func.borrow_mut())(&filter, &filters, operands, x)
+                            .unwrap_or(x[0].clone())
                     })
                     .collect();
                 flag = tmp.iter().any(|x| match x {
@@ -129,31 +128,54 @@ fn sentence_to_exp(filters: &Vec<Filter>, operands: &mut Vec<String>, sentence: 
     }
 }
 
-fn from_string(string: &str) -> Vec<Expression> {
-    let mut res = Vec::new();
-    for c in string.chars() {
-        match c {
-            '0'..='9' => res.push(Expression::Operand(c.to_string())),
-            '∧' | '∨' | '~' | '→' => res.push(Expression::Operator(c.to_string())),
-            '(' | ')' => res.push(Expression::Parenthesis(c.to_string())),
-            _ => (),
-        }
-    }
+fn from_string(resultants: &Vec<Vec<String>>, string: &str) -> Vec<Expression> {
+    let symbols = resultants
+        .iter()
+        .flatten()
+        .cloned()
+        .filter(|x| x != PLACEHOLDER)
+        .collect::<Vec<String>>();
+    let res = string
+        .split_whitespace()
+        .map(|x| {
+            let mut word = x.to_string();
+            let mut res = Vec::new();
+            while word.starts_with("(") {
+                res.push("(".to_string());
+                word = word[1..].to_string();
+            }
+            let mut tmp = Vec::new();
+            while word.ends_with(")") {
+                word = word[..word.len() - 1].to_string();
+                tmp.push(")".to_string());
+            }
+            res.push(word);
+            res.extend(tmp);
+            res
+        })
+        .flatten()
+        .map(|x| match x.as_str() {
+            "(" => Expression::Parenthesis("(".to_string()),
+            ")" => Expression::Parenthesis(")".to_string()),
+            x if symbols.contains(&x.to_string()) => Expression::Operator(x.to_string()),
+            _ => Expression::Operand(x.to_string()),
+        })
+        .collect::<Vec<Expression>>();
     res
 }
 
-fn precedence(op: &str) -> i32 {
-    match op {
-        "→" => 1,
-        "∨" => 2,
-        "∧" => 3,
-        "~" => 4,
-        _ => -1,
-    }
+fn precedence(resultants: &Vec<Vec<String>>, op: &str) -> i32 {
+    resultants
+        .iter()
+        .flatten()
+        .cloned()
+        .filter(|x| x != PLACEHOLDER)
+        .position(|x| x == op)
+        .unwrap() as i32
 }
 
-fn infix_to_postfix(infix: &str) -> String {
-    let expression = from_string(infix);
+fn infix_to_postfix(resultants: &Vec<Vec<String>>, infix: &str) -> String {
+    let expression = from_string(resultants, infix);
     let mut stack = Vec::new();
     let mut res = String::new();
 
@@ -176,7 +198,8 @@ fn infix_to_postfix(infix: &str) -> String {
                 } else {
                     while !stack.is_empty()
                         && stack.last().unwrap() != &"("
-                        && precedence(op) <= precedence(stack.last().unwrap())
+                        && precedence(resultants, op)
+                            <= precedence(resultants, stack.last().unwrap())
                     {
                         res.push_str(&format!("{} ", stack.pop().unwrap()));
                     }
@@ -191,8 +214,12 @@ fn infix_to_postfix(infix: &str) -> String {
     res
 }
 
-fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
-    let expression = from_string(&postfix);
+fn evaluate(
+    resultants: &Vec<Vec<String>>,
+    postfix: String,
+    state: u32,
+) -> (Vec<String>, Vec<bool>) {
+    let expression = from_string(resultants, &postfix);
     let mut stack = Vec::new();
     let mut res = Vec::new();
     let mut header = Vec::new();
@@ -200,56 +227,80 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
     for c in expression.iter() {
         match c {
             Expression::Operand(ref x) => {
-                let bit = (x.clone().pop().unwrap()) as u8 - 48;
+                let bit = x.parse::<u32>().unwrap();
                 let val = ((state >> bit) & 1) != 0;
                 stack.push((x.clone(), val))
             }
             Expression::Operator(ref op) => {
+                let no_of_operands = resultants.iter().find(|x| x.contains(op)).unwrap().len() - 1;
                 let mut operands = Vec::new();
                 let mut expr = String::new();
-                if op == "~" {
-                    operands.push(stack.pop().unwrap());
-                    expr.push_str(op);
-                    expr.push_str(&operands[0].0);
-                } else {
-                    operands.push(stack.pop().unwrap());
-                    operands.push(stack.pop().unwrap());
-                    expr.push_str("(");
-                    expr.push_str(&operands[1].0);
-                    expr.push_str(op);
-                    expr.push_str(&operands[0].0);
-                    expr.push_str(")");
+                match no_of_operands {
+                    1 => {
+                        expr.push_str(&format!("{}{}", op, stack.last().unwrap().0));
+                        operands.push(stack.pop().unwrap());
+                    }
+                    2 => {
+                        expr.push_str(&format!(
+                            "({}{}{})",
+                            stack.last().unwrap().0,
+                            op,
+                            stack[stack.len() - 2].0
+                        ));
+                        operands.push(stack.pop().unwrap());
+                        operands.push(stack.pop().unwrap());
+                    }
+                    3 => {
+                        expr.push_str(&format!(
+                            "({}{}{}{}{})",
+                            stack.last().unwrap().0,
+                            op,
+                            stack[stack.len() - 2].0,
+                            op,
+                            stack[stack.len() - 3].0
+                        ));
+                        operands.push(stack.pop().unwrap());
+                        operands.push(stack.pop().unwrap());
+                        operands.push(stack.pop().unwrap());
+                    }
+                    _ => panic!("Invalid number of operands"),
                 }
                 let val = match op.as_str() {
                     "~" => !operands[0].1,
                     "∧" => operands[1].1 & operands[0].1,
                     "∨" => operands[1].1 | operands[0].1,
                     "→" => !operands[1].1 | operands[0].1,
-                    _ => panic!("Unknown operator"),
+                    "↔" => operands[1].1 == operands[0].1,
+                    "←" => !operands[0].1 | operands[1].1,
+                    "⊕" => operands[1].1 ^ operands[0].1,
+                    "↑" => !(operands[1].1 & operands[0].1),
+                    "↓" => !(operands[1].1 | operands[0].1),
+                    "⊤" => true,
+                    "⊥" => false,
+                    _ => panic!("Unknown operator {}", op),
                 };
                 header.push(expr.clone());
                 res.push(val);
                 stack.push((expr.clone(), val));
             }
-            _ => panic!("Unknown expression"),
+            _ => panic!("Unknown expression {:?}", expression),
         }
     }
     (header, res)
 }
 
 fn filter_template(
-    words: Vec<String>,
-    res: Vec<String>,
+    filter: &Filter,
     filters: &Vec<Filter>,
     operands: &mut Vec<String>,
     x: &[Type],
 ) -> Option<Type> {
-    let ph = PLACEHOLDER.clone();
-    let pattern = words
-        .into_iter()
+    let pattern = filter
+        .words
+        .iter()
         .zip(x.iter())
         .map(|(a, b)| {
-            if a == ph {
+            if a == PLACEHOLDER {
                 if b.type_is() == "keyword" {
                     false
                 } else {
@@ -262,26 +313,62 @@ fn filter_template(
         .collect::<Vec<bool>>();
     let flag = pattern.iter().all(|x| *x);
     if flag {
-        let mut ops = x
+        let input_count = filter.words.iter().filter(|x| *x == PLACEHOLDER).count();
+        let output_count = filter
+            .resultant
+            .iter()
+            .filter(|x| *x == PLACEHOLDER)
+            .count();
+        let ops = if input_count > output_count {
+            let mut res = Vec::new();
+            let mut remaining = Vec::new();
+            for item in x.iter() {
+                if item.type_is() == "intermediate" {
+                    res.push(item.clone());
+                } else if item.type_is() == "operand" {
+                    remaining.push(item.clone());
+                }
+            }
+            let diff = output_count - res.len();
+            res.extend(remaining.iter().take(diff - 1).cloned());
+            let last = remaining
+                .iter()
+                .skip(diff - 1)
+                .cloned()
+                .filter_map(|x| match x {
+                    Type::Operand(op) => Some(op),
+                    _ => None,
+                })
+                .collect::<Vec<String>>();
+            res.push(Type::Operand(last.join(" ")));
+            res
+        } else {
+            x.iter()
+                .filter(|x| x.type_is() != "keyword")
+                .cloned()
+                .collect::<Vec<Type>>()
+        };
+        let mut ops = ops
             .iter()
             .filter_map(|x| match x {
                 Type::Intermidiate(ref exp) => Some(exp.clone()),
-                Type::Operand(ref op) => Some(sentence_to_exp(filters, operands, op)),
+                Type::Operand(ref op) => Some(sentence_to_exp(&filters, operands, op)),
                 Type::Keyword(_) => return None,
             })
             .collect::<Vec<String>>();
-        let symbols = res
+        let symbols = filter
+            .resultant
             .iter()
             .map(|x| {
-                if x == &ph {
+                if x == PLACEHOLDER {
                     ops.remove(0)
                 } else {
                     x.to_string()
                 }
             })
             .collect::<Vec<String>>();
-        if ops.len() == 1 {
-            Some(Type::Intermidiate(symbols.join("")))
+        if symbols.len() == 2 {
+            Some(Type::Intermidiate(symbols.join(" ")))
         } else {
             Some(Type::Intermidiate(format!("({})", symbols.join(" "))))
         }
@@ -385,11 +472,15 @@ fn main() {
     println!("F2: {}", f2);
     println!("G: {}", g);
 
-    let final_expression = format!("(({}) ∧ ({})) → {}", f1, f2, g);
+    let final_expression = format!("(({}) ∧ ({})) → ({})", f1, f2, g);
     println!("Final expression: {}", final_expression);
     println!();
 
-    let postfix = infix_to_postfix(&final_expression);
+    let resultants = filters
+        .iter()
+        .map(|x| x.resultant.clone())
+        .collect::<Vec<Vec<String>>>();
+    let postfix = infix_to_postfix(&resultants, &final_expression);
     println!("Postfix: {}", postfix);
     println!("Truth table:");
     let no_of_operands = operands.len() as u32;
@@ -399,7 +490,7 @@ fn main() {
         let mut state = (0..no_of_operands)
             .map(|j| (i >> j) & 1 != 0)
             .collect::<Vec<bool>>();
-        let (top, mut res) = evaluate(postfix.clone(), i);
+        let (top, mut res) = evaluate(&resultants, postfix.clone(), i);
         head = top;
         state.append(&mut res);
         tt.push(state);
