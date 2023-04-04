@@ -1,21 +1,23 @@
-use sentence::{SentenceTokenizer, Token};
+use std::{cell::RefCell, rc::Rc};
 
 const ARGUMENTS: [&str; 2] = ["therefore", "so"];
+const PLACEHOLDER: &str = "op";
 
-type FilterFn = fn(&Vec<Filter>, &mut Vec<String>, &[Type]) -> Option<Type>;
+type FilterFn =
+    dyn Fn(Vec<String>, Vec<String>, &Vec<Filter>, &mut Vec<String>, &[Type]) -> Option<Type>;
 
 #[derive(Clone)]
 struct Filter {
-    length: usize,
-    keywords: Vec<&'static str>,
-    func: FilterFn,
+    words: Vec<String>,
+    resultant: Vec<String>,
+    func: Rc<RefCell<FilterFn>>,
 }
 
 impl Filter {
-    fn new(length: usize, keywords: Vec<&'static str>, func: FilterFn) -> Self {
+    fn new(words: Vec<String>, resultant: Vec<String>, func: Rc<RefCell<FilterFn>>) -> Self {
         Self {
-            length,
-            keywords,
+            words,
+            resultant,
             func,
         }
     }
@@ -44,14 +46,14 @@ enum Expression {
     Parenthesis(String),
 }
 
-fn string_to_type(keywords: &Vec<&str>, exp: &str) -> Result<Vec<Type>, String> {
+fn string_to_type(keywords: &Vec<String>, exp: &str) -> Result<Vec<Type>, String> {
     let mut res = Vec::new();
     let mut operand = String::new();
     let mut count = 0;
     let tokens = exp.split_whitespace().collect::<Vec<&str>>();
 
     for t in tokens.iter() {
-        if keywords.contains(t) {
+        if keywords.contains(&t.to_string()) {
             if !operand.is_empty() {
                 res.push(Type::Operand(operand.trim().to_string()));
                 operand.clear();
@@ -83,13 +85,28 @@ fn sentence_to_exp(filters: &Vec<Filter>, operands: &mut Vec<String>, sentence: 
         return id.to_string();
     } else {
         let filter = filters.remove(0);
-        let mut tmp = string_to_type(&filter.keywords, sentence).unwrap();
+        let keywords = filter
+            .words
+            .clone()
+            .into_iter()
+            .filter(|x| x != PLACEHOLDER)
+            .collect::<Vec<String>>();
+        let mut tmp = string_to_type(&keywords, sentence).unwrap();
         if tmp.len() > 1 {
             let mut flag = true;
             while flag {
                 tmp = tmp
-                    .windows(filter.length)
-                    .map(|x| (filter.func)(&filters, operands, x).unwrap_or(x[0].clone()))
+                    .windows(filter.words.len())
+                    .map(|x| {
+                        (*filter.func.borrow_mut())(
+                            filter.words.clone(),
+                            filter.resultant.clone(),
+                            &filters,
+                            operands,
+                            x,
+                        )
+                        .unwrap_or(x[0].clone())
+                    })
                     .collect();
                 flag = tmp.iter().any(|x| match x {
                     Type::Keyword(_) => true,
@@ -220,123 +237,87 @@ fn evaluate(postfix: String, state: u32) -> (Vec<String>, Vec<bool>) {
     (header, res)
 }
 
-fn main() {
-    let strings = vec!["if", "op", "then", "op"];
-    let filter_template = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| {
-        // using the strings vector, generate the pattern for matching
-        // ex: [Type::Keyword(ref op1), ref a, Type::Keyword(ref op2), ref b]
-        let pattern = strings
-            .iter()
-            .zip(x.iter())
-            .map(|(a, b)| {
-                if a == &"op" {
-                    if b.type_is() == "keyword" {
-                        false
-                    } else {
-                        true
-                    }
+fn filter_template(
+    words: Vec<String>,
+    res: Vec<String>,
+    filters: &Vec<Filter>,
+    operands: &mut Vec<String>,
+    x: &[Type],
+) -> Option<Type> {
+    let ph = PLACEHOLDER.clone();
+    let pattern = words
+        .into_iter()
+        .zip(x.iter())
+        .map(|(a, b)| {
+            if a == ph {
+                if b.type_is() == "keyword" {
+                    false
                 } else {
-                    b == &Type::Keyword(a.to_string())
+                    true
+                }
+            } else {
+                b == &Type::Keyword(a.to_string())
+            }
+        })
+        .collect::<Vec<bool>>();
+    let flag = pattern.iter().all(|x| *x);
+    if flag {
+        let mut ops = x
+            .iter()
+            .filter_map(|x| match x {
+                Type::Intermidiate(ref exp) => Some(exp.clone()),
+                Type::Operand(ref op) => Some(sentence_to_exp(filters, operands, op)),
+                Type::Keyword(_) => return None,
+            })
+            .collect::<Vec<String>>();
+        let symbols = res
+            .iter()
+            .map(|x| {
+                if x == &ph {
+                    ops.remove(0)
+                } else {
+                    x.to_string()
                 }
             })
-            .collect::<Vec<bool>>();
-        let flag = pattern.iter().all(|x| *x);
-        if flag {
-            let a_exp = match a {
-                Type::Intermidiate(ref exp) => exp.clone(),
-                Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                Type::Keyword(_) => return None,
-            };
-            let b_exp = match b {
-                Type::Intermidiate(ref exp) => exp.clone(),
-                Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                Type::Keyword(_) => return None,
-            };
-            Some(Type::Intermidiate(format!("({} {} {})", a_exp, "→", b_exp)))
+            .collect::<Vec<String>>();
+        if ops.len() == 1 {
+            Some(Type::Intermidiate(symbols.join("")))
         } else {
-            None
+            Some(Type::Intermidiate(format!("({})", symbols.join(" "))))
         }
-    };
-    let implies = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| match x {
-        [Type::Keyword(ref op1), ref a, Type::Keyword(ref op2), ref b] => {
-            if op1 == "if" && op2 == "then" && a.type_is() != "keyword" && b.type_is() != "keyword"
-            {
-                let a_exp = match a {
-                    Type::Intermidiate(ref exp) => exp.clone(),
-                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    Type::Keyword(_) => return None,
-                };
-                let b_exp = match b {
-                    Type::Intermidiate(ref exp) => exp.clone(),
-                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    Type::Keyword(_) => return None,
-                };
-                Some(Type::Intermidiate(format!("({} {} {})", a_exp, "→", b_exp)))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-    let xor = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| match x {
-        [Type::Keyword(ref op1), ref a, Type::Keyword(ref op2), ref b, Type::Keyword(ref op3)] => {
-            if op1 == "either" && op2 == "or" && op3 == "but not both" {
-                let a_exp = match a {
-                    Type::Intermidiate(ref exp) => exp.clone(),
-                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    Type::Keyword(_) => return None,
-                };
-                let b_exp = match b {
-                    Type::Intermidiate(ref exp) => exp.clone(),
-                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    Type::Keyword(_) => return None,
-                };
-                Some(Type::Intermidiate(format!("({} {} {})", a_exp, "⊕", b_exp)))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-    let and = |filters: &Vec<Filter>, operands: &mut Vec<String>, x: &[Type]| match x {
-        [ref a, Type::Keyword(ref op), ref b] => {
-            if op == "and" {
-                let a_exp = match a {
-                    Type::Intermidiate(ref exp) => exp.clone(),
-                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    Type::Keyword(_) => return None,
-                };
-                let b_exp = match b {
-                    Type::Intermidiate(ref exp) => exp.clone(),
-                    Type::Operand(ref op) => sentence_to_exp(filters, operands, op),
-                    Type::Keyword(_) => return None,
-                };
-                Some(Type::Intermidiate(format!("({} {} {})", a_exp, "∧", b_exp)))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    };
-    let filters: Vec<Filter> = vec![
-        Filter::new(4, vec!["if", "then"], implies),
-        Filter::new(5, vec!["either", "or", "but not both"], xor),
-        Filter::new(3, vec!["and"], and),
-    ];
+    } else {
+        None
+    }
+}
 
+fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 2 {
-        println!("Usage: ./{} <text/file path>", args[0]);
+    if args.len() != 3 {
+        println!("Usage: ./{} <path to vocabolary> <text/file path>", args[0]);
         println!("This program takes one argument, either a multi-line string or a file path");
         return;
     }
-    let text = if args[1].ends_with(".txt") {
-        std::fs::read_to_string(&args[1]).unwrap()
+    let text = if args[2].ends_with(".txt") {
+        std::fs::read_to_string(&args[2]).unwrap()
     } else {
-        args[1].clone()
+        args[2].clone()
     };
 
     let input = text.lines().take(3).collect::<Vec<&str>>();
+
+    let vocabolary: Vec<Vec<Vec<String>>> =
+        serde_json::from_str(&std::fs::read_to_string(&args[1]).unwrap()).unwrap();
+
+    let mut filters = Vec::new();
+    for sentence in vocabolary.into_iter() {
+        let words = sentence[0].clone();
+        let res = sentence[1].clone();
+        filters.push(Filter::new(
+            words,
+            res,
+            Rc::new(RefCell::new(filter_template)),
+        ));
+    }
 
     println!("Input:");
     for line in input.iter() {
@@ -344,18 +325,18 @@ fn main() {
     }
     println!();
 
-    let tokenizer = SentenceTokenizer::new();
     let expressions = input
         .iter()
         .map(|line| {
-            let token = tokenizer.tokenize(line);
-            token
-                .iter()
-                .filter_map(|t| match t {
-                    Token::Word(ref w) => Some(w.to_lowercase()),
+            line.chars()
+                .filter_map(|c| match c {
+                    'a'..='z' | 'A'..='Z' => Some(c.to_lowercase().to_string()),
+                    ' ' => Some(c.to_string()),
                     _ => None,
                 })
-                .collect::<Vec<String>>()
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<Vec<&str>>()
                 .join(" ")
         })
         .collect::<Vec<String>>();
