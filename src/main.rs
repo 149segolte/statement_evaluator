@@ -233,35 +233,19 @@ fn evaluate(
             }
             Expression::Operator(ref op) => {
                 let no_of_operands = resultants.iter().find(|x| x.contains(op)).unwrap().len() - 1;
-                let mut operands = Vec::new();
                 let mut expr = String::new();
+                let operands = stack.split_off(stack.len() - no_of_operands);
                 match no_of_operands {
                     1 => {
-                        expr.push_str(&format!("{}{}", op, stack.last().unwrap().0));
-                        operands.push(stack.pop().unwrap());
+                        expr.push_str(&format!("{}{}", op, operands[0].0));
                     }
                     2 => {
                         expr.push_str(&format!(
                             "({}{}{})",
-                            stack.last().unwrap().0,
+                            operands[0].0,
                             op,
-                            stack[stack.len() - 2].0
+                            operands[1].0
                         ));
-                        operands.push(stack.pop().unwrap());
-                        operands.push(stack.pop().unwrap());
-                    }
-                    3 => {
-                        expr.push_str(&format!(
-                            "({}{}{}{}{})",
-                            stack.last().unwrap().0,
-                            op,
-                            stack[stack.len() - 2].0,
-                            op,
-                            stack[stack.len() - 3].0
-                        ));
-                        operands.push(stack.pop().unwrap());
-                        operands.push(stack.pop().unwrap());
-                        operands.push(stack.pop().unwrap());
                     }
                     _ => panic!("Invalid number of operands"),
                 }
